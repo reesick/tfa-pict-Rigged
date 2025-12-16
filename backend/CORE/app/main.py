@@ -43,9 +43,12 @@ def health_check():
     }
 
 
-# Router includes (will be added as we build APIs)
-# from app.api import auth, transactions, budgets, merchants, websocket
-# app.include_router(auth.router, prefix="/api")
+# Router includes
+from app.api import auth
+app.include_router(auth.router, prefix="/api")
+
+# Additional routers will be added as we build them
+# from app.api import transactions, budgets, merchants, websocket
 # app.include_router(transactions.router, prefix="/api")
 # app.include_router(budgets.router, prefix="/api")
 # app.include_router(merchants.router, prefix="/api")
