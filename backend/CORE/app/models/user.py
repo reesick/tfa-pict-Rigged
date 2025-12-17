@@ -1,24 +1,72 @@
-"""User model - Core user accounts and authentication."""
-from sqlalchemy import Column, String, DateTime, Boolean, Index
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+"""
+User Model - Core user accounts and authentication.
+Database-agnostic: Works with PostgreSQL (production) and SQLite (testing).
+"""
+from sqlalchemy import Column, String, DateTime, Boolean, Text, Index, TypeDecorator
 from sqlalchemy.orm import relationship
 import uuid
+import json
 from datetime import datetime
 from app.database import Base
 
+
+# ==================== CUSTOM TYPES ====================
+# These types work with both PostgreSQL and SQLite
+
+class GUID(TypeDecorator):
+    """Platform-independent GUID type. Uses String(36) storage."""
+    impl = String(36)
+    cache_ok = True
+    
+    def process_bind_param(self, value, dialect):
+        if value is not None:
+            return str(value)
+        return value
+    
+    def process_result_value(self, value, dialect):
+        if value is not None:
+            return uuid.UUID(value) if isinstance(value, str) else value
+        return value
+
+
+class JSONType(TypeDecorator):
+    """Platform-independent JSON type. Uses Text storage."""
+    impl = Text
+    cache_ok = True
+    
+    def process_bind_param(self, value, dialect):
+        if value is not None:
+            return json.dumps(value)
+        return None
+    
+    def process_result_value(self, value, dialect):
+        if value is not None:
+            return json.loads(value)
+        return None
+
+
+# ==================== USER MODEL ====================
 
 class User(Base):
     """
     User account model.
     
-    Stores user authentication credentials, profile information,
-    blockchain wallet addresses, and user preferences.
+    Handles:
+    - Authentication (email + password)
+    - Profile information
+    - Blockchain wallet addresses
+    - User preferences
+    
+    Edge cases handled:
+    - Email uniqueness enforced at database level
+    - Defaults for all nullable fields
+    - Timestamps auto-managed
     """
     __tablename__ = "users"
     
     # Primary Key
     id = Column(
-        UUID(as_uuid=True),
+        GUID(),
         primary_key=True,
         default=uuid.uuid4,
         comment="Unique user identifier"
@@ -42,54 +90,55 @@ class User(Base):
     phone = Column(
         String(20),
         nullable=True,
+        default=None,
         comment="Phone number with country code"
     )
     full_name = Column(
         String(255),
         nullable=True,
+        default=None,
         comment="User's full name"
     )
     
-    # Blockchain Integration (Person 3)
+    # Blockchain Integration
     wallet_addresses = Column(
-        JSONB,
+        JSONType(),
         default=list,
         nullable=False,
-        comment="Array of blockchain wallet addresses: ['0x123...', '0x456...']"
+        comment="Array of blockchain wallet addresses"
     )
     
     # User Preferences
     preferences = Column(
-        JSONB,
+        JSONType(),
         default=dict,
         nullable=False,
-        comment="User settings: {currency: 'USD', theme: 'dark', language: 'en'}"
+        comment="User settings and preferences"
     )
     
-    # Status Flags
+    # Account Status
     is_active = Column(
         Boolean,
         default=True,
         nullable=False,
-        index=True,
-        comment="Account active status (false = deactivated)"
+        comment="Whether account is active"
     )
     is_verified = Column(
         Boolean,
         default=False,
         nullable=False,
-        comment="Email verification status"
+        comment="Whether email is verified"
     )
     
     # Timestamps
     created_at = Column(
-        DateTime(timezone=True),
+        DateTime,
         default=datetime.utcnow,
         nullable=False,
         comment="Account creation timestamp"
     )
     updated_at = Column(
-        DateTime(timezone=True),
+        DateTime,
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
         nullable=False,
@@ -97,57 +146,45 @@ class User(Base):
     )
     
     # Relationships
-    transactions = relationship(
-        "Transaction",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="dynamic",
-        doc="User's financial transactions"
-    )
-    budgets = relationship(
-        "Budget",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="dynamic",
-        doc="User's budget allocations"
-    )
-    portfolios = relationship(
-        "PortfolioHolding",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="dynamic",
-        doc="User's investment holdings"
-    )
-    corrections = relationship(
-        "UserCorrection",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="dynamic",
-        doc="User's transaction corrections (ML training data)"
-    )
+    transactions = relationship("Transaction", back_populates="user", cascade="all, delete-orphan")
+    budgets = relationship("Budget", back_populates="user", cascade="all, delete-orphan")
+    corrections = relationship("UserCorrection", back_populates="user", cascade="all, delete-orphan")
     
-    # Indexes for performance
+    # Indexes
     __table_args__ = (
-        Index('idx_users_email', 'email'),
-        Index('idx_users_active', 'is_active', postgresql_where=is_active),
-        Index('idx_users_wallet_gin', 'wallet_addresses', postgresql_using='gin'),
-        Index('idx_users_created', 'created_at'),
+        Index("idx_users_email", email),
+        Index("idx_users_active", is_active),
     )
     
     def __repr__(self):
         return f"<User(id={self.id}, email={self.email})>"
     
+    # ==================== HELPER METHODS ====================
+    
     def to_dict(self):
-        """Convert model to dictionary (excludes password)."""
+        """Convert user to dictionary (excluding password)."""
         return {
             "id": str(self.id),
             "email": self.email,
             "phone": self.phone,
             "full_name": self.full_name,
-            "wallet_addresses": self.wallet_addresses,
-            "preferences": self.preferences,
             "is_active": self.is_active,
             "is_verified": self.is_verified,
             "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
+    
+    def add_wallet(self, address: str) -> bool:
+        """Add a wallet address if not already present."""
+        if not self.wallet_addresses:
+            self.wallet_addresses = []
+        if address not in self.wallet_addresses:
+            self.wallet_addresses = self.wallet_addresses + [address]
+            return True
+        return False
+    
+    def remove_wallet(self, address: str) -> bool:
+        """Remove a wallet address if present."""
+        if self.wallet_addresses and address in self.wallet_addresses:
+            self.wallet_addresses = [w for w in self.wallet_addresses if w != address]
+            return True
+        return False

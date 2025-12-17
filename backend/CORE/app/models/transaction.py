@@ -1,223 +1,254 @@
-"""Transaction model - Core financial transaction data."""
-from sqlalchemy import (
-    Column, String, DateTime, Numeric, Date, 
-    ForeignKey, Enum, Float, Text, Index, Boolean
-)
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+"""
+Transaction Model - Financial transactions with full audit trail.
+Database-agnostic: Works with PostgreSQL (production) and SQLite (testing).
+"""
+from sqlalchemy import Column, String, DateTime, Boolean, Numeric, Date, Text, Index, Enum, ForeignKey
 from sqlalchemy.orm import relationship
 import uuid
-from datetime import datetime
-from app.database import Base
+import json
 import enum
+from datetime import datetime, date
+from decimal import Decimal
+from app.database import Base
 
+
+# ==================== CUSTOM TYPES ====================
+
+class GUID(str):
+    """String-based UUID type that works with both PostgreSQL and SQLite."""
+    pass
+
+
+from sqlalchemy import TypeDecorator
+
+class GUIDType(TypeDecorator):
+    """Platform-independent GUID type."""
+    impl = String(36)
+    cache_ok = True
+    
+    def process_bind_param(self, value, dialect):
+        if value is not None:
+            return str(value)
+        return value
+    
+    def process_result_value(self, value, dialect):
+        if value is not None:
+            if isinstance(value, str):
+                return uuid.UUID(value)
+            return value
+        return value
+
+
+class JSONType(TypeDecorator):
+    """Platform-independent JSON type."""
+    impl = Text
+    cache_ok = True
+    
+    def process_bind_param(self, value, dialect):
+        if value is not None:
+            return json.dumps(value)
+        return None
+    
+    def process_result_value(self, value, dialect):
+        if value is not None:
+            return json.loads(value)
+        return None
+
+
+# ==================== ENUMS ====================
 
 class TransactionSource(str, enum.Enum):
-    """Transaction data source types."""
-    OCR = "ocr"
-    SMS = "sms"
-    CSV = "csv"
-    MANUAL = "manual"
-    BLOCKCHAIN = "blockchain"
+    """How the transaction was created/imported."""
+    OCR = "ocr"           # Receipt image scanning
+    SMS = "sms"           # Bank SMS parsing
+    CSV = "csv"           # Bank statement import
+    MANUAL = "manual"     # User manual entry
+    BLOCKCHAIN = "blockchain"  # On-chain sync
 
+
+# ==================== TRANSACTION MODEL ====================
 
 class Transaction(Base):
     """
     Financial transaction model.
     
-    Stores all user transactions with AI/ML metadata, blockchain
-    anchoring information, and source tracking for Person 2's ingestion system.
+    Handles:
+    - Transaction amounts with decimal precision
+    - Multiple data sources (OCR, SMS, CSV, manual, blockchain)
+    - AI confidence scores for extracted data
+    - Blockchain anchoring status
+    
+    Edge cases handled:
+    - Decimal precision for currency
+    - NULL handling for optional fields
+    - Cascading deletes for corrections
+    - Proper indexing for queries
     """
     __tablename__ = "transactions"
     
     # Primary Key
     id = Column(
-        UUID(as_uuid=True),
+        GUIDType(),
         primary_key=True,
         default=uuid.uuid4,
         comment="Unique transaction identifier"
     )
     
-    # Foreign Keys
+    # Foreign Key
     user_id = Column(
-        UUID(as_uuid=True),
+        GUIDType(),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
-        comment="Owner of this transaction"
-    )
-    merchant_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("merchant_master.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-        comment="Linked canonical merchant (null if not matched)"
+        comment="Owner user ID"
     )
     
     # Core Transaction Data
     amount = Column(
-        Numeric(12, 2),
+        Numeric(12, 2),  # Up to 9,999,999,999.99
         nullable=False,
-        comment="Transaction amount (exact decimal, supports up to 9,999,999,999.99)"
+        comment="Transaction amount with 2 decimal precision"
     )
     date = Column(
         Date,
         nullable=False,
         index=True,
-        comment="Transaction date (day-level precision)"
+        comment="Transaction date"
     )
+    
+    # Merchant Information
     merchant_raw = Column(
-        Text,
+        String(500),
         nullable=True,
-        comment="Raw merchant text extracted from OCR/SMS before normalization"
+        comment="Raw merchant text from source (receipt/SMS)"
     )
+    merchant_id = Column(
+        GUIDType(),
+        ForeignKey("merchant_master.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Matched merchant from master list"
+    )
+    
+    # Categorization
     category = Column(
         String(100),
         nullable=True,
         index=True,
-        comment="Transaction category (Food, Transport, Shopping, etc.)"
+        comment="Transaction category (Food, Transport, etc.)"
     )
     description = Column(
         Text,
         nullable=True,
-        comment="Optional transaction notes/description"
+        comment="User notes or additional description"
     )
     
-    # Source Metadata
+    # Data Source
     source = Column(
-        Enum(TransactionSource),
+        String(20),
+        default="manual",
         nullable=False,
-        index=True,
-        comment="How transaction was ingested: ocr, sms, csv, manual, blockchain"
-    )
-    ingestion_id = Column(
-        UUID(as_uuid=True),
-        nullable=True,
-        comment="Link to Person 2's ingestion tracking record"
+        comment="Data source: ocr, sms, csv, manual, blockchain"
     )
     
-    # AI/ML Data (Person 2)
+    # AI Confidence Scores
     confidence = Column(
-        JSONB,
+        JSONType(),
         nullable=True,
-        comment="AI confidence scores: {overall: 0.95, amount: 0.98, merchant: 0.92, category: 0.91}"
-    )
-    anomaly_score = Column(
-        Float,
-        default=0.0,
-        nullable=False,
-        index=True,
-        comment="Anomaly detection score (0.0-1.0, higher = more suspicious)"
-    )
-    ai_metadata = Column(
-        JSONB,
-        nullable=True,
-        comment="Additional AI/ML metadata from Person 2"
+        comment="AI extraction confidence: {amount: 0.95, merchant: 0.87}"
     )
     
-    # Blockchain Data (Person 3)
+    # Anomaly Detection
+    anomaly_score = Column(
+        Numeric(5, 4),  # 0.0000 to 9.9999
+        default=0.0,
+        comment="Anomaly detection score (0=normal, 1=anomaly)"
+    )
+    
+    # Blockchain Anchoring (Person 3)
     blockchain_hash = Column(
-        String(64),
+        String(66),
         nullable=True,
         unique=True,
-        comment="SHA-256 hash of transaction for blockchain anchoring"
+        comment="Merkle root hash on blockchain"
     )
     ipfs_cid = Column(
         String(100),
         nullable=True,
-        comment="IPFS CID for receipt image storage"
+        comment="IPFS CID for receipt image"
     )
     is_anchored = Column(
         Boolean,
         default=False,
         nullable=False,
-        index=True,
-        comment="Whether transaction is anchored to blockchain"
+        comment="Whether transaction is blockchain-anchored"
     )
     
     # Timestamps
     created_at = Column(
-        DateTime(timezone=True),
+        DateTime,
         default=datetime.utcnow,
         nullable=False,
-        index=True,
-        comment="Transaction creation timestamp (when added to system)"
+        comment="When transaction was created in system"
     )
     updated_at = Column(
-        DateTime(timezone=True),
+        DateTime,
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
         nullable=False,
-        comment="Last update timestamp"
+        comment="Last modification timestamp"
     )
     
     # Relationships
-    user = relationship(
-        "User",
-        back_populates="transactions",
-        doc="Transaction owner"
-    )
-    merchant = relationship(
-        "MerchantMaster",
-        foreign_keys=[merchant_id],
-        doc="Canonical merchant if matched"
-    )
-    corrections = relationship(
-        "UserCorrection",
-        back_populates="transaction",
-        cascade="all, delete-orphan",
-        lazy="dynamic",
-        doc="User corrections for this transaction (ML training)"
-    )
+    user = relationship("User", back_populates="transactions")
+    merchant = relationship("MerchantMaster", back_populates="transactions")
+    corrections = relationship("UserCorrection", back_populates="transaction", cascade="all, delete-orphan")
     
-    # Composite Indexes for Performance
+    # Indexes for common queries
     __table_args__ = (
-        # Dashboard query: Recent transactions for user
-        Index('idx_txn_user_date', 'user_id', 'date', postgresql_ops={'date': 'DESC'}),
-        
-        # Budget tracking: User's spending by category
-        Index('idx_txn_user_category', 'user_id', 'category'),
-        
-        # Anomaly detection: High-risk transactions
-        Index('idx_txn_anomaly', 'anomaly_score', postgresql_where="anomaly_score > 0.5"),
-        
-        # Source filtering
-        Index('idx_txn_source', 'source'),
-        
-        # Recent transactions timeline
-        Index('idx_txn_created', 'created_at', postgresql_ops={'created_at': 'DESC'}),
-        
-        # Merchant analytics
-        Index('idx_txn_merchant', 'merchant_id'),
-        
-        # JSONB confidence queries
-        Index('idx_txn_confidence_gin', 'confidence', postgresql_using='gin'),
-        
-        # Blockchain anchoring status
-        Index('idx_txn_anchored', 'is_anchored', postgresql_where="is_anchored = false"),
+        Index("idx_transactions_user_date", user_id, date.desc()),
+        Index("idx_transactions_category", category),
+        Index("idx_transactions_source", source),
     )
     
     def __repr__(self):
-        return f"<Transaction(id={self.id}, amount={self.amount}, date={self.date}, category={self.category})>"
+        return f"<Transaction(id={self.id}, amount={self.amount}, date={self.date})>"
     
-    def to_dict(self):
-        """Convert model to dictionary."""
+    # ==================== HELPER METHODS ====================
+    
+    def to_dict(self) -> dict:
+        """Convert transaction to dictionary."""
         return {
             "id": str(self.id),
             "user_id": str(self.user_id),
-            "merchant_id": str(self.merchant_id) if self.merchant_id else None,
-            "amount": float(self.amount) if self.amount else None,
+            "amount": str(self.amount),
             "date": self.date.isoformat() if self.date else None,
             "merchant_raw": self.merchant_raw,
-            "merchant": self.merchant.to_dict() if self.merchant else None,
             "category": self.category,
             "description": self.description,
-            "source": self.source.value if self.source else None,
-            "ingestion_id": str(self.ingestion_id) if self.ingestion_id else None,
+            "source": self.source,
             "confidence": self.confidence,
-            "anomaly_score": self.anomaly_score,
-            "blockchain_hash": self.blockchain_hash,
-            "ipfs_cid": self.ipfs_cid,
+            "anomaly_score": float(self.anomaly_score) if self.anomaly_score else 0.0,
             "is_anchored": self.is_anchored,
             "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
+    
+    @property
+    def amount_float(self) -> float:
+        """Get amount as float for calculations."""
+        return float(self.amount) if self.amount else 0.0
+    
+    def set_confidence(self, field: str, score: float):
+        """Set confidence score for a field (0.0 to 1.0)."""
+        if not self.confidence:
+            self.confidence = {}
+        if 0.0 <= score <= 1.0:
+            self.confidence[field] = score
+        else:
+            raise ValueError(f"Confidence score must be between 0 and 1, got {score}")
+    
+    def mark_anchored(self, blockchain_hash: str, ipfs_cid: str = None):
+        """Mark transaction as blockchain-anchored."""
+        self.blockchain_hash = blockchain_hash
+        if ipfs_cid:
+            self.ipfs_cid = ipfs_cid
+        self.is_anchored = True

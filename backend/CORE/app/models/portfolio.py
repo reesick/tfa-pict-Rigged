@@ -1,183 +1,146 @@
-"""Portfolio model - Investment holdings tracking."""
-from sqlalchemy import Column, String, Numeric, DateTime, ForeignKey, Enum, Index
-from sqlalchemy.dialects.postgresql import UUID
+"""
+Portfolio Model - Investment portfolio holdings.
+Database-agnostic: Works with PostgreSQL (production) and SQLite (testing).
+"""
+from sqlalchemy import Column, String, DateTime, Numeric, Index, ForeignKey, TypeDecorator
 from sqlalchemy.orm import relationship
 import uuid
+import enum
 from datetime import datetime
 from app.database import Base
-import enum
+
+
+class GUIDType(TypeDecorator):
+    """Platform-independent GUID type."""
+    impl = String(36)
+    cache_ok = True
+    
+    def process_bind_param(self, value, dialect):
+        if value is not None:
+            return str(value)
+        return value
+    
+    def process_result_value(self, value, dialect):
+        if value is not None:
+            return uuid.UUID(value) if isinstance(value, str) else value
+        return value
 
 
 class AssetType(str, enum.Enum):
-    """Types of investment assets."""
+    """Types of portfolio assets."""
     STOCK = "stock"
+    ETF = "etf"
+    MUTUAL_FUND = "mutual_fund"
     CRYPTO = "crypto"
     BOND = "bond"
-    MUTUAL_FUND = "mutual_fund"
-    ETF = "etf"
     COMMODITY = "commodity"
+    OTHER = "other"
 
 
 class PortfolioHolding(Base):
     """
-    Investment portfolio holdings model.
+    User investment portfolio holdings.
     
-    Tracks user's traditional and crypto investments.
-    Person 3 updates crypto holdings from blockchain data.
+    Tracks user's investments across different asset types
+    with current and purchase values.
     """
     __tablename__ = "portfolio_holdings"
     
-    # Primary Key
     id = Column(
-        UUID(as_uuid=True),
+        GUIDType(),
         primary_key=True,
         default=uuid.uuid4,
         comment="Unique holding identifier"
     )
     
-    # Foreign Key
     user_id = Column(
-        UUID(as_uuid=True),
+        GUIDType(),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
-        comment="Portfolio owner"
+        comment="Owner user ID"
     )
     
     # Asset Information
-    asset_type = Column(
-        Enum(AssetType),
+    symbol = Column(
+        String(20),
         nullable=False,
-        index=True,
-        comment="Type of asset: stock, crypto, bond, etc."
-    )
-    identifier = Column(
-        String(100),
-        nullable=False,
-        comment="Asset identifier: ticker symbol (AAPL) or contract address (0x...)"
+        comment="Asset symbol (e.g., AAPL, BTC)"
     )
     name = Column(
         String(255),
         nullable=True,
-        comment="Asset name: Apple Inc., Bitcoin, etc."
+        comment="Full asset name"
+    )
+    asset_type = Column(
+        String(20),
+        default="stock",
+        nullable=False,
+        comment="Asset type: stock, etf, crypto, etc."
     )
     
-    # Holdings Data
-    units = Column(
-        Numeric(20, 8),
+    # Holdings
+    quantity = Column(
+        Numeric(18, 8),  # Supports fractional shares and crypto
         nullable=False,
-        comment="Number of units held (8 decimals for crypto precision)"
+        comment="Number of units held"
     )
-    cost_basis = Column(
-        Numeric(12, 2),
-        nullable=True,
+    purchase_price = Column(
+        Numeric(18, 8),
+        nullable=False,
         comment="Average purchase price per unit"
     )
-    
-    # Valuation (updated by background jobs or Person 3)
     current_price = Column(
-        Numeric(12, 2),
+        Numeric(18, 8),
         nullable=True,
         comment="Current market price per unit"
     )
-    last_valuation = Column(
-        Numeric(15, 2),
-        nullable=True,
-        comment="Total current value (units * current_price)"
-    )
-    valuation_currency = Column(
+    
+    # Currency
+    currency = Column(
         String(3),
         default="USD",
         nullable=False,
-        comment="ISO 4217 currency code for valuation"
-    )
-    
-    # Blockchain Data (for crypto assets - Person 3)
-    chain = Column(
-        String(50),
-        nullable=True,
-        comment="Blockchain network: ethereum, polygon, bitcoin, etc."
-    )
-    wallet_address = Column(
-        String(100),
-        nullable=True,
-        comment="Wallet address holding this asset"
+        comment="Currency code (USD, EUR, INR, etc.)"
     )
     
     # Timestamps
-    acquired_at = Column(
-        DateTime(timezone=True),
+    purchase_date = Column(
+        DateTime,
         nullable=True,
-        comment="When asset was acquired"
+        comment="Date of purchase"
     )
-    updated_at = Column(
-        DateTime(timezone=True),
+    last_updated = Column(
+        DateTime,
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
         nullable=False,
-        comment="Last update timestamp"
+        comment="Last price update timestamp"
+    )
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False
     )
     
-    # Relationships
-    user = relationship(
-        "User",
-        back_populates="portfolios",
-        doc="Portfolio owner"
-    )
-    
-    # Indexes
     __table_args__ = (
-        Index('idx_portfolio_user', 'user_id'),
-        Index('idx_portfolio_asset_type', 'asset_type'),
-        Index('idx_portfolio_identifier', 'identifier'),
-        Index('idx_portfolio_chain', 'chain'),
+        Index("idx_portfolio_user", user_id),
+        Index("idx_portfolio_symbol", symbol),
     )
     
     def __repr__(self):
-        return f"<PortfolioHolding(id={self.id}, type={self.asset_type}, identifier={self.identifier}, units={self.units})>"
+        return f"<PortfolioHolding(id={self.id}, symbol={self.symbol}, qty={self.quantity})>"
     
-    def to_dict(self):
-        """Convert model to dictionary."""
-        return {
-            "id": str(self.id),
-            "user_id": str(self.user_id),
-            "asset_type": self.asset_type.value if self.asset_type else None,
-            "identifier": self.identifier,
-            "name": self.name,
-            "units": float(self.units) if self.units else None,
-            "cost_basis": float(self.cost_basis) if self.cost_basis else None,
-            "current_price": float(self.current_price) if self.current_price else None,
-            "last_valuation": float(self.last_valuation) if self.last_valuation else None,
-            "valuation_currency": self.valuation_currency,
-            "chain": self.chain,
-            "wallet_address": self.wallet_address,
-            "acquired_at": self.acquired_at.isoformat() if self.acquired_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None
-        }
+    @property
+    def current_value(self) -> float:
+        """Calculate current value of holding."""
+        if self.current_price and self.quantity:
+            return float(self.current_price * self.quantity)
+        return 0.0
     
-    def calculate_profit_loss(self) -> dict:
-        """
-        Calculate profit/loss for this holding.
-        
-        Returns:
-            Dictionary with profit/loss metrics
-        """
-        if not self.cost_basis or not self.current_price or not self.units:
-            return {
-                "total_cost": None,
-                "current_value": None,
-                "profit_loss": None,
-                "profit_loss_percentage": None
-            }
-        
-        total_cost = float(self.cost_basis * self.units)
-        current_value = float(self.current_price * self.units)
-        profit_loss = current_value - total_cost
-        profit_loss_pct = (profit_loss / total_cost * 100) if total_cost != 0 else 0
-        
-        return {
-            "total_cost": round(total_cost, 2),
-            "current_value": round(current_value, 2),
-            "profit_loss": round(profit_loss, 2),
-            "profit_loss_percentage": round(profit_loss_pct, 2)
-        }
+    @property
+    def gain_loss(self) -> float:
+        """Calculate unrealized gain/loss."""
+        if self.current_price and self.purchase_price and self.quantity:
+            return float((self.current_price - self.purchase_price) * self.quantity)
+        return 0.0

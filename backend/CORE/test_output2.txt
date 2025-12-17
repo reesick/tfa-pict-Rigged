@@ -1,0 +1,9 @@
+=== ALL PHASE TEST ===
+[1] Config... OK
+[2] Database... OK
+[3] Models... OK
+[4] Auth schemas... OK
+[5] Transaction schemas... 
+ERROR: PydanticUserError: Error when building FieldInfo from annotated attribute. Make sure you don't have any field name clashing with a type annotation.
+
+For further information visit https://errors.pydantic.dev/2.12/u/unevaluable-type-annotation
