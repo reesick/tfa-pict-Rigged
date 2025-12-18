@@ -206,12 +206,21 @@ class TransactionService:
         - Same user
         - Same date (±1 day)
         - Similar amount (±tolerance_percent)
-        - Similar merchant (if provided)
+        - MUST have matching merchant (no merchant = no duplicate check)
+        
+        Note: Without merchant, we cannot reliably detect duplicates.
+        Multiple $25 purchases on same day is normal behavior.
         """
+        # No merchant = no reliable duplicate detection
+        if not merchant_raw or len(merchant_raw.strip()) < 3:
+            return None
+        
         amount_decimal = Decimal(str(amount))
         tolerance = amount_decimal * Decimal(str(tolerance_percent / 100))
         min_amount = amount_decimal - tolerance
         max_amount = amount_decimal + tolerance
+        
+        merchant_lower = merchant_raw.lower().strip()[:20]  # First 20 chars
         
         query = self.db.query(Transaction).filter(
             Transaction.user_id == user_id,
@@ -220,15 +229,10 @@ class TransactionService:
                 transaction_date - timedelta(days=1),
                 transaction_date + timedelta(days=1)
             ),
-            Transaction.amount.between(min_amount, max_amount)
+            Transaction.amount.between(min_amount, max_amount),
+            # MUST match merchant
+            func.lower(Transaction.merchant_raw).like(f"%{merchant_lower}%")
         )
-        
-        # If merchant provided, try to match
-        if merchant_raw:
-            merchant_lower = merchant_raw.lower()[:20]  # First 20 chars
-            query = query.filter(
-                func.lower(Transaction.merchant_raw).like(f"%{merchant_lower}%")
-            )
         
         return query.first()
     
