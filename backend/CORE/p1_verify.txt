@@ -1,0 +1,11 @@
+=== PRIORITY 1 VERIFICATION ===
+Recurrence model: OK
+Embedding model: OK
+Model exports: OK
+Celery queues: ['high_priority', 'default', 'low_priority', 'scheduled']
+MessageType.BUDGET_ALERT: budget_alert
+MessageType.SUBSCRIPTION_REMINDER: subscription_reminder
+All notification helpers: OK
+Main app routes: 30
+
+=== ALL PRIORITY 1 PASSED ===

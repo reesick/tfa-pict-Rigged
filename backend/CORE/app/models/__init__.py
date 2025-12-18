@@ -5,6 +5,8 @@ from app.models.merchant import MerchantMaster
 from app.models.budget import Budget
 from app.models.portfolio import PortfolioHolding, AssetType
 from app.models.blockchain import MerkleBatch, UserCorrection
+from app.models.recurrence import Recurrence
+from app.models.embedding import Embedding
 
 __all__ = [
     "User",
@@ -15,7 +17,7 @@ __all__ = [
     "PortfolioHolding",
     "AssetType",
     "MerkleBatch",
-    "UserCorrection"
+    "UserCorrection",
+    "Recurrence",
+    "Embedding",
 ]
-# from app.models.portfolio import PortfolioHolding
-# from app.models.blockchain import MerkleBatch, UserCorrection

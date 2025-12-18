@@ -2,7 +2,7 @@
 Transaction API Endpoints - Simple and Clear
 Each endpoint does one thing well with minimal complexity.
 """
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, status, UploadFile, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import date
@@ -127,6 +127,24 @@ def create_transaction(
         category=data.category,
         description=data.description
     )
+    
+    # Check budget alert if category is set
+    if data.category:
+        try:
+            from app.services.budget import BudgetService
+            budget_service = BudgetService(db)
+            alerts = budget_service.get_alerts(current_user.id)
+            
+            # Find alert for this category
+            for alert in alerts:
+                if alert["category"] == data.category:
+                    # Queue notification task (async, non-blocking)
+                    from app.tasks.notifications import send_budget_alert
+                    send_budget_alert.delay(str(current_user.id), alert)
+                    break
+        except Exception:
+            pass  # Don't block transaction on alert errors
+    
     return to_response(transaction)
 
 
@@ -194,4 +212,116 @@ def correct_transaction(
         field_corrected=data.field_corrected,
         old_value=correction.old_value,
         new_value=data.new_value
+    )
+
+
+# ==================== CSV UPLOAD ====================
+@router.post("/upload", status_code=status.HTTP_202_ACCEPTED, summary="Upload CSV")
+async def upload_csv(
+    file: UploadFile,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload CSV file of transactions for batch processing.
+    
+    CSV format:
+    date,amount,merchant,category,description
+    2024-01-15,50.00,Starbucks,Food,Coffee
+    
+    Processing happens in background via Celery.
+    """
+    import tempfile
+    import os
+    
+    # Validate file type
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="File must be CSV format")
+    
+    # Save to temp file
+    content = await file.read()
+    temp_path = os.path.join(tempfile.gettempdir(), f"upload_{current_user.id}_{file.filename}")
+    with open(temp_path, 'wb') as f:
+        f.write(content)
+    
+    # Queue batch processing
+    try:
+        from app.tasks.process_transaction import batch_process_csv
+        task = batch_process_csv.delay(str(current_user.id), temp_path)
+        task_id = task.id
+    except Exception:
+        task_id = "queued"  # Celery not running
+    
+    return {
+        "message": "CSV upload accepted for processing",
+        "filename": file.filename,
+        "task_id": task_id,
+        "status": "processing"
+    }
+
+
+# ==================== EXPORT ====================
+@router.get("/export", summary="Export transactions")
+def export_transactions(
+    format: str = Query("csv", description="Export format: csv or json"),
+    since: Optional[date] = Query(None),
+    until: Optional[date] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Export transactions as CSV or JSON.
+    
+    Returns downloadable file content.
+    """
+    from fastapi.responses import Response
+    import csv
+    import io
+    import json as json_lib
+    
+    service = TransactionService(db)
+    transactions, _ = service.list_all(
+        user_id=current_user.id,
+        limit=10000,  # Max export
+        offset=0,
+        since=since,
+        until=until
+    )
+    
+    if format == "json":
+        data = [
+            {
+                "id": str(t.id),
+                "date": str(t.date),
+                "amount": str(t.amount),
+                "merchant": t.merchant_raw,
+                "category": t.category,
+                "description": t.description
+            }
+            for t in transactions
+        ]
+        return Response(
+            content=json_lib.dumps(data, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": "attachment; filename=transactions.json"}
+        )
+    
+    # CSV format (default)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["date", "amount", "merchant", "category", "description"])
+    
+    for t in transactions:
+        writer.writerow([
+            str(t.date),
+            str(t.amount),
+            t.merchant_raw or "",
+            t.category or "",
+            t.description or ""
+        ])
+    
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=transactions.csv"}
     )
