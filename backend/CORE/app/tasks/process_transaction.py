@@ -94,3 +94,61 @@ def update_anomaly_scores(user_id: str):
     # 4. Notify user of any new anomalies
     
     return {"status": "completed", "user_id": user_id}
+
+
+@shared_task
+def detect_subscriptions():
+    """
+    Detect recurring transactions (subscriptions) for all users.
+    
+    Scheduled to run nightly at 1 AM via Celery Beat.
+    
+    This is a PLACEHOLDER for Person 2 (ML Engineer) to implement.
+    
+    Algorithm outline:
+    1. For each user, get transactions from last 90 days
+    2. Group by merchant (fuzzy match)
+    3. Look for patterns:
+       - Same/similar amount
+       - Regular intervals (7, 14, 28, 30 days)
+    4. Calculate confidence score
+    5. Store in recurrences table
+    6. Send WebSocket notification for new subscriptions
+    
+    Usage (Person 2 implements):
+        # When you find a subscription:
+        from app.models.recurrence import Recurrence
+        from app.websocket.manager import manager
+        from app.websocket.message_types import msg_subscription_detected
+        
+        recurrence = Recurrence(
+            user_id=user_id,
+            merchant_id=merchant.id,
+            amount_mean=avg_amount,
+            period_days=30,  # monthly
+            next_expected_date=next_date,
+            confidence=0.92
+        )
+        db.add(recurrence)
+        db.commit()
+        
+        # Notify user
+        message = msg_subscription_detected(
+            merchant="Netflix",
+            amount=15.99,
+            period_days=30,
+            next_date="2024-01-15",
+            confidence=0.92
+        )
+        await manager.send_to_user(str(user_id), message)
+    """
+    logger.info("Subscription detection task started")
+    
+    # TODO: Person 2 - implement subscription detection ML here
+    # See docstring above for algorithm outline
+    
+    # For now, just log and return
+    return {
+        "status": "placeholder",
+        "message": "Person 2: Implement subscription detection here"
+    }

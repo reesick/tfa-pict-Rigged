@@ -198,6 +198,15 @@ class Transaction(Base):
         comment="Last modification timestamp"
     )
     
+    # Soft Delete
+    is_deleted = Column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True,
+        comment="Soft delete flag - True hides from queries"
+    )
+    
     # Relationships
     user = relationship("User", back_populates="transactions")
     merchant = relationship("MerchantMaster", back_populates="transactions")

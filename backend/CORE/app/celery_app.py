@@ -18,6 +18,7 @@ celery_app = Celery(
         "app.tasks.process_transaction",
         "app.tasks.notifications",
         "app.tasks.blockchain",
+        "app.tasks.budgets",
     ]
 )
 
@@ -81,7 +82,7 @@ celery_app.conf.update(
 celery_app.conf.beat_schedule = {
     # Check budget alerts every hour
     'check-budget-alerts-hourly': {
-        'task': 'app.tasks.notifications.check_all_budget_alerts',
+        'task': 'app.tasks.budgets.check_all_budget_alerts',
         'schedule': 3600.0,  # Every hour
     },
     # Process pending blockchain batches every 5 minutes
