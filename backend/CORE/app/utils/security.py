@@ -1,77 +1,156 @@
-"""Security utilities for password hashing and JWT token management."""
-from passlib.context import CryptContext
+"""
+Security utilities for Supabase JWT token verification.
+Authentication is handled by Supabase Auth - backend only verifies tokens.
+"""
+import base64
+import logging
 from jose import JWTError, jwt
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Dict, Any
 from app.config import get_settings
 
+logger = logging.getLogger(__name__)
+
 settings = get_settings()
 
-# Password hashing context with bcrypt
+
+def get_supabase_jwt_secret() -> str:
+    """
+    Get Supabase JWT secret (may be base64 encoded).
+    Supabase JWT secrets are base64 encoded by default.
+    """
+    secret = settings.supabase_jwt_secret
+    
+    if not secret:
+        # Fallback to legacy JWT_SECRET for backward compatibility
+        return settings.jwt_secret
+    
+    # Supabase JWT secrets are base64 encoded
+    # Try to decode if it looks like base64
+    try:
+        # Check if it's base64 by trying to decode
+        if len(secret) > 50 and '/' in secret or '+' in secret or '=' in secret:
+            decoded = base64.b64decode(secret)
+            return decoded.decode('utf-8')
+    except Exception:
+        pass
+    
+    return secret
+
+
+def decode_supabase_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Decode and validate Supabase JWT token.
+    
+    Supabase tokens have structure:
+    {
+        "aud": "authenticated",
+        "exp": 1234567890,
+        "sub": "user-uuid",  # This is the user ID
+        "email": "user@example.com",
+        "role": "authenticated",
+        ...
+    }
+    
+    Args:
+        token: JWT token from Supabase Auth
+        
+    Returns:
+        Decoded payload if valid, None if invalid
+    """
+    try:
+        secret = get_supabase_jwt_secret()
+        
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            options={
+                "verify_aud": False,  # Supabase uses different audiences
+                "verify_iss": False   # Different issuers
+            }
+        )
+        
+        # Validate required fields
+        if not payload.get("sub"):
+            logger.warning("Token missing 'sub' (user ID)")
+            return None
+        
+        # Check expiration (jose does this automatically, but log it)
+        exp = payload.get("exp")
+        if exp and datetime.utcfromtimestamp(exp) < datetime.utcnow():
+            logger.warning("Token expired")
+            return None
+        
+        return payload
+        
+    except JWTError as e:
+        logger.warning(f"JWT decode error: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error decoding token: {e}")
+        return None
+
+
+def get_user_id_from_token(token: str) -> Optional[str]:
+    """
+    Extract user ID from Supabase JWT token.
+    
+    Args:
+        token: JWT token string
+        
+    Returns:
+        User ID (UUID string) if valid, None otherwise
+    """
+    payload = decode_supabase_token(token)
+    if payload:
+        return payload.get("sub")
+    return None
+
+
+def get_user_email_from_token(token: str) -> Optional[str]:
+    """
+    Extract email from Supabase JWT token.
+    
+    Args:
+        token: JWT token string
+        
+    Returns:
+        Email if present, None otherwise
+    """
+    payload = decode_supabase_token(token)
+    if payload:
+        return payload.get("email")
+    return None
+
+
+# ==================== LEGACY SUPPORT ====================
+# These functions are kept for backward compatibility during migration
+# They use the legacy JWT_SECRET (not Supabase)
+
+from passlib.context import CryptContext
+
 pwd_context = CryptContext(
     schemes=["bcrypt"],
     deprecated="auto",
-    bcrypt__rounds=12  # 2^12 = 4096 iterations, ~200ms hashing time
+    bcrypt__rounds=12
 )
 
 
 def hash_password(password: str) -> str:
-    """
-    Hash password using bcrypt.
-    
-    Args:
-        password: Plain text password
-        
-    Returns:
-        Hashed password string (60 chars, starts with $2b$)
-        
-    Example:
-        >>> hashed = hash_password("SecurePass123!")
-        >>> len(hashed)
-        60
-        >>> hashed.startswith("$2b$")
-        True
-    """
+    """Hash password using bcrypt (legacy, Supabase handles auth)."""
     return pwd_context.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Verify password against bcrypt hash.
-    
-    Args:
-        plain_password: Password to verify
-        hashed_password: Bcrypt hash to check against
-        
-    Returns:
-        True if password matches, False otherwise
-        
-    Example:
-        >>> hashed = hash_password("test123")
-        >>> verify_password("test123", hashed)
-        True
-        >>> verify_password("wrong", hashed)
-        False
-    """
+    """Verify password (legacy, Supabase handles auth)."""
     return pwd_context.verify(plain_password, hashed_password)
 
 
-def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
-    """
-    Create JWT access token.
+def create_access_token(data: Dict[str, Any], expires_delta=None) -> str:
+    """Create JWT token (legacy, use Supabase Auth instead)."""
+    from datetime import timedelta
     
-    Args:
-        data: Payload data (typically {"sub": user_id})
-        expires_delta: Optional custom expiration time
-        
-    Returns:
-        JWT token string
-        
-    Example:
-        >>> token = create_access_token({"sub": "user-123"})
-        >>> len(token.split("."))
-        3
-    """
     to_encode = data.copy()
     
     if expires_delta:
@@ -85,61 +164,25 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
         "type": "access"
     })
     
-    encoded_jwt = jwt.encode(
+    return jwt.encode(
         to_encode,
         settings.jwt_secret,
         algorithm=settings.jwt_algorithm
     )
-    
-    return encoded_jwt
-
-
-def create_refresh_token(data: Dict[str, Any]) -> str:
-    """
-    Create JWT refresh token (longer expiration).
-    
-    Args:
-        data: Payload data (typically {"sub": user_id})
-        
-    Returns:
-        JWT refresh token string
-    """
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=settings.refresh_token_expire_days)
-    
-    to_encode.update({
-        "exp": expire,
-        "iat": datetime.utcnow(),
-        "type": "refresh"
-    })
-    
-    encoded_jwt = jwt.encode(
-        to_encode,
-        settings.jwt_secret,
-        algorithm=settings.jwt_algorithm
-    )
-    
-    return encoded_jwt
 
 
 def decode_token(token: str) -> Optional[Dict[str, Any]]:
     """
-    Decode and validate JWT token.
+    Decode JWT token - tries Supabase first, then legacy.
     
-    Args:
-        token: JWT token string
-        
-    Returns:
-        Decoded payload dict if valid, None if invalid or expired
-        
-    Example:
-        >>> token = create_access_token({"sub": "user-123"})
-        >>> payload = decode_token(token)
-        >>> payload["sub"]
-        'user-123'
-        >>> payload["type"]
-        'access'
+    This provides backward compatibility during migration.
     """
+    # Try Supabase token first
+    payload = decode_supabase_token(token)
+    if payload:
+        return payload
+    
+    # Fallback to legacy token format
     try:
         payload = jwt.decode(
             token,
@@ -149,25 +192,3 @@ def decode_token(token: str) -> Optional[Dict[str, Any]]:
         return payload
     except JWTError:
         return None
-
-
-def verify_token_type(token: str, expected_type: str) -> Optional[Dict[str, Any]]:
-    """
-    Verify token is of expected type (access or refresh).
-    
-    Args:
-        token: JWT token string
-        expected_type: "access" or "refresh"
-        
-    Returns:
-        Decoded payload if valid and correct type, None otherwise
-    """
-    payload = decode_token(token)
-    
-    if not payload:
-        return None
-    
-    if payload.get("type") != expected_type:
-        return None
-    
-    return payload

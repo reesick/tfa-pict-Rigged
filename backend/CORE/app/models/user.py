@@ -64,31 +64,26 @@ class User(Base):
     """
     __tablename__ = "users"
     
-    # Primary Key
+    # Primary Key (synced from Supabase auth.users)
     id = Column(
         GUID(),
         primary_key=True,
         default=uuid.uuid4,
-        comment="Unique user identifier"
+        comment="User ID (synced from Supabase auth.users)"
     )
     
-    # Authentication
+    # Profile Information (synced from Supabase Auth)
     email = Column(
         String(255),
         unique=True,
-        nullable=False,
+        nullable=True,  # Nullable as it's synced from auth.users
         index=True,
-        comment="User email address (unique, used for login)"
+        comment="User email (synced from Supabase auth.users)"
     )
-    hashed_password = Column(
-        String(255),
-        nullable=False,
-        comment="bcrypt hashed password"
-    )
+    # NOTE: No hashed_password - Supabase Auth handles authentication
     
-    # Profile Information
     phone = Column(
-        String(20),
+        String(30),
         nullable=True,
         default=None,
         comment="Phone number with country code"
@@ -114,6 +109,15 @@ class User(Base):
         default=dict,
         nullable=False,
         comment="User settings and preferences"
+    )
+    
+    # Additional Metadata (for extensibility)
+    # Named 'user_metadata' to avoid conflict with SQLAlchemy's reserved 'metadata'
+    user_metadata = Column(
+        JSONType(),
+        default=dict,
+        nullable=False,
+        comment="Additional user metadata (for LLM context, etc.)"
     )
     
     # Account Status

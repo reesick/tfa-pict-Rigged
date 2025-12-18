@@ -105,9 +105,9 @@ class Transaction(Base):
     
     # Core Transaction Data
     amount = Column(
-        Numeric(12, 2),  # Up to 9,999,999,999.99
+        Numeric(18, 4),  # High precision for crypto/financial
         nullable=False,
-        comment="Transaction amount with 2 decimal precision"
+        comment="Transaction amount with 4 decimal precision"
     )
     date = Column(
         Date,
@@ -136,6 +136,11 @@ class Transaction(Base):
         index=True,
         comment="Transaction category (Food, Transport, etc.)"
     )
+    subcategory = Column(
+        String(100),
+        nullable=True,
+        comment="Sub-category (e.g., Coffee under Food)"
+    )
     description = Column(
         Text,
         nullable=True,
@@ -147,7 +152,12 @@ class Transaction(Base):
         String(20),
         default="manual",
         nullable=False,
-        comment="Data source: ocr, sms, csv, manual, blockchain"
+        comment="Data source: ocr, sms, csv, manual"
+    )
+    ingestion_id = Column(
+        GUIDType(),
+        nullable=True,
+        comment="Batch import ID for CSV/bulk imports"
     )
     
     # AI Confidence Scores
@@ -172,7 +182,7 @@ class Transaction(Base):
         comment="Merkle root hash on blockchain"
     )
     ipfs_cid = Column(
-        String(100),
+        String(200),
         nullable=True,
         comment="IPFS CID for receipt image"
     )
