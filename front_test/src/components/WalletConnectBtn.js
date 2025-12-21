@@ -4,7 +4,7 @@ import { AppKitButton, useAppKitAccount } from '@reown/appkit-react-native';
 import axios from 'axios'; 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_URL = 'http://192.168.1.XX:8000/api/wallet/connect'; 
+const API_URL = 'http://192.168.1.4:8000/api/wallet/connect'; 
 
 export const WalletConnectBtn = ({ onSyncSuccess }) => {
   const { address, isConnected } = useAppKitAccount();
