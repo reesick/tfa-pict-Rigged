@@ -48,12 +48,13 @@ def health_check():
 
 
 # Router includes
-from app.api import auth, transactions, budgets, merchants, websocket
+from app.api import auth, transactions, budgets, merchants, websocket , analysis 
 app.include_router(auth.router, prefix="/api")
 app.include_router(transactions.router, prefix="/api")
 app.include_router(budgets.router, prefix="/api")
 app.include_router(merchants.router, prefix="/api")
 app.include_router(websocket.router)  # No prefix - WS at /ws
+app.include_router(analysis.router)
 
 
 if __name__ == "__main__":
