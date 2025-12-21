@@ -6,6 +6,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
+from app.api import wallet
 
 settings = get_settings()
 
@@ -54,6 +55,7 @@ app.include_router(transactions.router, prefix="/api")
 app.include_router(budgets.router, prefix="/api")
 app.include_router(merchants.router, prefix="/api")
 app.include_router(websocket.router)  # No prefix - WS at /ws
+app.include_router(wallet.router, prefix="/api/wallet", tags=["Wallet"])
 
 
 if __name__ == "__main__":
